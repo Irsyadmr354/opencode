@@ -67,13 +67,17 @@ export const layer = Layer.effect(
     )
 
     // Config is per location, but the index covers the whole database: it runs while any loaded location enables
-    // it, and is dropped once every loaded location has it off. Undefined when no location says either way.
+    // it, and is dropped once every loaded location turns it off explicitly. Off by default, as in a release, means
+    // leave it alone: a release and a dev build sharing one database must not drop and rebuild each other's index.
+    // Undefined when no location says either way.
     const configured = Effect.gen(function* () {
       const flags = yield* Effect.forEach(Array.from(yield* RcMap.keys(locations.rcMap)), (ref) =>
         Effect.gen(function* () {
           const context = yield* locations.contextEffectOption(ref)
           if (Option.isNone(context)) return undefined
-          return yield* Context.get(context.value, Flag.Service).enabled("sqlite_fts")
+          const flag = (yield* Context.get(context.value, Flag.Service).all).sqlite_fts
+          if (flag.enabled) return true
+          return flag.source === "default" ? undefined : false
         }).pipe(
           Effect.scoped,
           Effect.orElseSucceed(() => undefined),

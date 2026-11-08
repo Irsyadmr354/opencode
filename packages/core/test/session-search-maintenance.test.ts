@@ -24,8 +24,9 @@ import { Document, Info } from "@opencode/schema/config"
 import { ConfigExperimental } from "@opencode/schema/config/experimental"
 import { testEffect } from "./lib/effect"
 
-// experimental.sqlite_fts per workspace, read by each location's Config when it loads.
-const flags = new Map<string, boolean>()
+// experimental.sqlite_fts per workspace, read by each location's Config when it loads. Unset runs as a release
+// build, where the flag is off by default.
+const flags = new Map<string, boolean | undefined>()
 
 const locations = Layer.effect(
   LocationServiceMap.Service,
@@ -35,14 +36,17 @@ const locations = Layer.effect(
         // The maintenance loop only reads flags from a location.
         // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
         Layer.mergeAll(
-          Flag.testLayer([
-            new Document({
-              type: "document",
-              info: new Info({
-                experimental: new ConfigExperimental.Info({ sqlite_fts: flags.get(ref.workspaceID ?? "") }),
+          Flag.testLayer(
+            [
+              new Document({
+                type: "document",
+                info: new Info({
+                  experimental: new ConfigExperimental.Info({ sqlite_fts: flags.get(ref.workspaceID ?? "") }),
+                }),
               }),
-            }),
-          ]),
+            ],
+            { app: { channel: "latest" } },
+          ),
           Layer.succeed(
             Location.Service,
             Location.Service.of({
@@ -76,7 +80,7 @@ const it = testEffect(
 )
 
 const directory = AbsolutePath.make("/project")
-const location = (workspace: string, enabled: boolean) => {
+const location = (workspace: string, enabled: boolean | undefined) => {
   const workspaceID = Workspace.ID.make(`wrk_${workspace}`)
   flags.set(workspaceID, enabled)
   return Location.Ref.make({ directory, workspaceID })
@@ -193,6 +197,20 @@ describe("SessionSearchMaintenance", () => {
       })
       yield* elapse
       expect((yield* SessionSearchIndex.status(db)).backfill).toBe("done")
+      expect(yield* titles(db, "walrus")).toEqual([Session.ID.make("ses_old")])
+    }),
+  )
+
+  it.effect("leaves the index alone where the flag is only off by default, as in a release", () =>
+    Effect.gen(function* () {
+      const { db } = yield* setup
+      yield* load(location("dev", true))
+      yield* elapse
+      const map = yield* LocationServiceMap.Service
+      yield* map.invalidate(location("dev", true))
+      yield* load(location("release", undefined))
+      yield* elapse
+      expect(yield* triggers(db)).toBeGreaterThan(0)
       expect(yield* titles(db, "walrus")).toEqual([Session.ID.make("ses_old")])
     }),
   )

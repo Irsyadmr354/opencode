@@ -99,14 +99,13 @@ export const ensure = Effect.fn("SessionSearchIndex.ensure")(function* (db: Data
  * there was anything to drop.
  */
 export const disable = Effect.fn("SessionSearchIndex.disable")(function* (db: DatabaseService) {
+  // Checked before taking the write lock, so a database without the index never waits on one.
+  if (!(yield* present(db))) return false
   return yield* db
     .transaction(
       () =>
         Effect.gen(function* () {
-          const present = yield* db.all<{ name: string }>(
-            sql`SELECT name FROM sqlite_master WHERE name IN (${list([IndexTable, ...triggers.map((trigger) => trigger.name)])})`,
-          )
-          if (present.length === 0 && (yield* readState(db)) === undefined) return false
+          if (!(yield* present(db))) return false
           for (const trigger of triggers) yield* db.run(`DROP TRIGGER IF EXISTS ${trigger.name}`)
           yield* db.run(`DROP TABLE IF EXISTS ${IndexTable}`)
           yield* db.delete(SessionSearchDocumentTable).run()
@@ -118,6 +117,14 @@ export const disable = Effect.fn("SessionSearchIndex.disable")(function* (db: Da
     )
     .pipe(Effect.orDie)
 })
+
+const present = (db: DatabaseService) =>
+  Effect.gen(function* () {
+    const objects = yield* db.all<{ name: string }>(
+      sql`SELECT name FROM sqlite_master WHERE name IN (${list([IndexTable, ...triggers.map((trigger) => trigger.name)])})`,
+    )
+    return objects.length > 0 || (yield* readState(db)) !== undefined
+  }).pipe(Effect.orDie)
 
 /**
  * Reindexes up to `limit` queued sources and dequeues them in one transaction, so a write queued meanwhile is either
