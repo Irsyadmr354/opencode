@@ -94,39 +94,6 @@ export const ensure = Effect.fn("SessionSearchIndex.ensure")(function* (db: Data
 })
 
 /**
- * Drops the index, its triggers, queue and state, so writes stop paying for it and a later {@link ensure} rebuilds
- * from scratch. Nothing records changes while it is off, so nothing could catch the index up instead. Returns whether
- * there was anything to drop.
- */
-export const disable = Effect.fn("SessionSearchIndex.disable")(function* (db: DatabaseService) {
-  // Checked before taking the write lock, so a database without the index never waits on one.
-  if (!(yield* present(db))) return false
-  return yield* db
-    .transaction(
-      () =>
-        Effect.gen(function* () {
-          if (!(yield* present(db))) return false
-          for (const trigger of triggers) yield* db.run(`DROP TRIGGER IF EXISTS ${trigger.name}`)
-          yield* db.run(`DROP TABLE IF EXISTS ${IndexTable}`)
-          yield* db.delete(SessionSearchDocumentTable).run()
-          yield* db.delete(SessionSearchDirtyTable).run()
-          yield* db.delete(KVTable).where(eq(KVTable.key, StateKey)).run()
-          return true
-        }),
-      Immediate,
-    )
-    .pipe(Effect.orDie)
-})
-
-const present = (db: DatabaseService) =>
-  Effect.gen(function* () {
-    const objects = yield* db.all<{ name: string }>(
-      sql`SELECT name FROM sqlite_master WHERE name IN (${list([IndexTable, ...triggers.map((trigger) => trigger.name)])})`,
-    )
-    return objects.length > 0 || (yield* readState(db)) !== undefined
-  }).pipe(Effect.orDie)
-
-/**
  * Reindexes up to `limit` queued sources and dequeues them in one transaction, so a write queued meanwhile is either
  * seen by this batch or stays queued. An assistant still streaming is dequeued without touching the index: finishing
  * rewrites its row, which queues it again, so streaming never blocks other sources or keeps the queue busy. Returns

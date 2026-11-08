@@ -66,26 +66,20 @@ export const layer = Layer.effect(
       Effect.forkScoped,
     )
 
-    // Config is per location, but the index covers the whole database: it runs while any loaded location enables
-    // it, and is dropped once every loaded location turns it off explicitly. Off by default, as in a release, means
-    // leave it alone: a release and a dev build sharing one database must not drop and rebuild each other's index.
-    // Undefined when no location says either way.
-    const configured = Effect.gen(function* () {
+    // Config is per location, but the index covers the whole database, so it is maintained while any loaded
+    // location enables it. Off, like any flag, only stops new work: an index already built stays as it is.
+    const enabled = Effect.gen(function* () {
       const flags = yield* Effect.forEach(Array.from(yield* RcMap.keys(locations.rcMap)), (ref) =>
         Effect.gen(function* () {
           const context = yield* locations.contextEffectOption(ref)
-          if (Option.isNone(context)) return undefined
-          const flag = (yield* Context.get(context.value, Flag.Service).all).sqlite_fts
-          if (flag.enabled) return true
-          return flag.source === "default" ? undefined : false
+          if (Option.isNone(context)) return false
+          return yield* Context.get(context.value, Flag.Service).enabled("sqlite_fts")
         }).pipe(
           Effect.scoped,
-          Effect.orElseSucceed(() => undefined),
+          Effect.orElseSucceed(() => false),
         ),
       )
-      if (flags.includes(true)) return true
-      if (flags.length > 0 && flags.every((flag) => flag === false)) return false
-      return undefined
+      return flags.includes(true)
     })
 
     /**
@@ -123,14 +117,8 @@ export const layer = Layer.effect(
 
     /** Returns how many milliseconds to wait before the next tick, or undefined to wait for new changes. */
     const tick = Effect.gen(function* () {
-      const enabled = yield* configured
-      state.active = enabled === true
-      if (enabled === false && (yield* SessionSearchIndex.disable(db))) {
-        state.backfilled = false
-        state.backfill = undefined
-        yield* Effect.logInfo("session search index dropped")
-      }
-      if (enabled !== true || state.unsupported) return undefined
+      state.active = yield* enabled
+      if (!state.active || state.unsupported) return undefined
       const capability = yield* SessionSearchIndex.ensure(db)
       if (!capability.supported) {
         state.unsupported = true

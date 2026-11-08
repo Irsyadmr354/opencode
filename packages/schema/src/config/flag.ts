@@ -17,6 +17,6 @@ export const registry = {
   artifacts: "Enable experimental artifacts backed by pluggable providers.",
   codemode_vm: "Run the Code Mode execute tool on the experimental bytecode VM instead of the legacy interpreter.",
   sqlite_fts:
-    "Build and maintain an SQLite full-text index of session titles and message text in the background. The index covers every session in the database while any loaded location enables it; once every loaded location turns it off explicitly, the index is dropped.",
+    "Build and maintain an SQLite full-text index of session titles and message text in the background. The index covers every session in the database and is maintained while any loaded location enables it.",
 } as const satisfies Record<string, string>
 export type Key = keyof typeof registry

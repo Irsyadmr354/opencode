@@ -24,9 +24,8 @@ import { Document, Info } from "@opencode/schema/config"
 import { ConfigExperimental } from "@opencode/schema/config/experimental"
 import { testEffect } from "./lib/effect"
 
-// experimental.sqlite_fts per workspace, read by each location's Config when it loads. Unset runs as a release
-// build, where the flag is off by default.
-const flags = new Map<string, boolean | undefined>()
+// experimental.sqlite_fts per workspace, read by each location's Config when it loads.
+const flags = new Map<string, boolean>()
 
 const locations = Layer.effect(
   LocationServiceMap.Service,
@@ -80,7 +79,7 @@ const it = testEffect(
 )
 
 const directory = AbsolutePath.make("/project")
-const location = (workspace: string, enabled: boolean | undefined) => {
+const location = (workspace: string, enabled: boolean) => {
   const workspaceID = Workspace.ID.make(`wrk_${workspace}`)
   flags.set(workspaceID, enabled)
   return Location.Ref.make({ directory, workspaceID })
@@ -151,7 +150,7 @@ describe("SessionSearchMaintenance", () => {
     }),
   )
 
-  it.effect("keeps the index while any loaded location enables it, and drops it once none does", () =>
+  it.effect("runs while any loaded location enables it; off stops it and keeps the index", () =>
     Effect.gen(function* () {
       const { db, insert } = yield* setup
       const on = location("mixed_on", true)
@@ -165,22 +164,20 @@ describe("SessionSearchMaintenance", () => {
       yield* map.invalidate(on)
       yield* load(on)
       yield* elapse
-      expect(yield* triggers(db)).toBe(0)
-      expect(yield* SessionSearchIndex.status(db)).toEqual({
-        version: undefined,
-        backfill: undefined,
-        pending: 0,
-        documents: 0,
-      })
-
-      // Writes made while off are not tracked, so turning it back on rebuilds from scratch.
+      // Off leaves the index as it was; writes meanwhile are only queued.
       yield* insert("ses_offline", "Written while the otter index was off")
+      yield* elapse
+      expect(yield* titles(db, "walrus")).toEqual([Session.ID.make("ses_old")])
+      expect(yield* titles(db, "otter")).toEqual([])
+      expect((yield* SessionSearchIndex.status(db)).pending).toBe(1)
+
+      // Back on, it catches up from the queue without rebuilding.
       flags.set(on.workspaceID ?? "", true)
       yield* map.invalidate(on)
       yield* load(on)
       yield* elapse
       expect(yield* titles(db, "otter")).toEqual([Session.ID.make("ses_offline")])
-      expect(yield* titles(db, "walrus")).toEqual([Session.ID.make("ses_old")])
+      expect((yield* SessionSearchIndex.status(db)).pending).toBe(0)
     }),
   )
 
@@ -197,20 +194,6 @@ describe("SessionSearchMaintenance", () => {
       })
       yield* elapse
       expect((yield* SessionSearchIndex.status(db)).backfill).toBe("done")
-      expect(yield* titles(db, "walrus")).toEqual([Session.ID.make("ses_old")])
-    }),
-  )
-
-  it.effect("leaves the index alone where the flag is only off by default, as in a release", () =>
-    Effect.gen(function* () {
-      const { db } = yield* setup
-      yield* load(location("dev", true))
-      yield* elapse
-      const map = yield* LocationServiceMap.Service
-      yield* map.invalidate(location("dev", true))
-      yield* load(location("release", undefined))
-      yield* elapse
-      expect(yield* triggers(db)).toBeGreaterThan(0)
       expect(yield* titles(db, "walrus")).toEqual([Session.ID.make("ses_old")])
     }),
   )
